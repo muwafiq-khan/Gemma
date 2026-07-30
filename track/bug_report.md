@@ -17,13 +17,7 @@
 | 9 | **Interview continuation prompt hardcodes question count** — adding Q4 to prompts.py not reflected in chat_fn | `app.py:309-316` | Refactored to shared INTERVIEW_QUESTIONS constant in prompts.py |
 | 10 | **Scene JSON truncated** — 2048/1024 tokens too low, rich prose cut off mid-JSON, parse_json fails | `app.py:487,151` | Bumped both to 4096 |
 | 11 | **Pregen cache stores empty API failure** — background thread caches `""`, main thread trusts cache, never retries | `app.py:153-154` | Added `if reply:` guard before `_store_pregen` |
-
----
-
-## ❌ NOT YET FIXED
-
-| # | Bug | Status | Evidence |
-|---|---|---|---|
+| 12 | **Choice click causes blank screen** — `call_gemma` uses `temperature=0.8`, so the model sometimes outputs choice IDs as integers (`"id": 1`) or non-standard strings instead of `"id": "a"`/`"b"`/`"c"`. The old `on_choice` did string match `c["id"] == cid`, found no match, returned `*([H]*13)` hiding all components including tabs. | `app.py:532-540` | Changed to positional lookup: button A → `choices[0]`, B → `choices[1]`, C → `choices[2]` via `CID_IDX` dict. Model's ID value no longer matters — position is always consistent. |
 
 ignore for now:
 | 7 | **No loading indicators during API calls** — no spinner while waiting | **PARTIALLY FIXED** — Added `show_loading()` for the "Dive Into Story" button (`app.py:391`). Still missing for: choice clicks → next scene, challenge submission, teaching responses, ending generation. |

@@ -529,11 +529,14 @@ def build_app():
                             H, H, H, H, H, H, H, H, gr.update(), gr.update(), gr.update())
 
             # ── Choice buttons ──
+            CID_IDX = {"a": 0, "b": 1, "c": 2}
             def on_choice(cid, s):
                 sd = s.get("current_scene_data", {})
                 choices = sd.get("choices", [])
-                chosen = next((c for c in choices if c["id"] == cid), None)
+                idx = CID_IDX.get(cid)
+                chosen = choices[idx] if idx is not None and idx < len(choices) else None
                 if not chosen:
+                    print(f"[BLANK] on_choice(cid={cid}) — scene_data keys={list(sd.keys())}, choices={choices}")
                     return s, *([H]*13), gr.update()
 
                 s["narrative_history"].append({

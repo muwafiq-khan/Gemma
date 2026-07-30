@@ -71,3 +71,17 @@ Each entry logs what the agent did, result, and key context.
 **Internal flow:** User reports Scene 2 empty → read gen_scene code → trace `_check_pregen` → see it returns cached `""` → trace `_pregen_next` → see it stores unconditionally → guard with `if reply:`.
 
 **Jargon explainer:** "Pregen" = short for pre-generation. A background thread that generates the next scene while you're still reading the current one, so when you click a choice it loads instantly. The bug was it cached API failures as valid results.
+
+---
+
+## 2026-07-30 — Choice click blank screen fix
+
+**What happened:** User reported screen going completely blank when clicking choice buttons mid-game. Traced root cause: `on_choice` matched choices by `choice["id"] == cid` (string compare), but model sometimes outputs integer IDs or non-standard strings. When no match found, all UI components get hidden.
+
+**Result:** Changed to positional lookup via `CID_IDX` dict. Button A → choices[0], B → choices[1], C → choices[2]. Also added `[BLANK]` debug print if the empty path still triggers. Ran `python -m py_compile` — OK.
+
+**Key context:** The scene rendering (`gen_scene`) already uses positional indexing (`choices[0]` on button A), but `on_choice` used ID-based lookup. This inconsistency meant any model deviation from "a"/"b"/"c" IDs caused a blank screen — no error, no API call, just hidden components.
+
+**Internal flow:** User reports blank screen mid-game → re-read `on_choice` → found `next((c for c in choices if c["id"] == cid), None)` → if model outputs `"id": 1` instead of `"id": "a"`, `chosen` is None → `*([H]*13)` hiding tabs → changed to positional lookup.
+
+**Jargon explainer:** "Positional lookup" = mapping button "a" to choices[0], button "b" to choices[1], button "c" to choices[2] based on their position in the array, not their ID field. This is more robust because position never changes — only the ID can vary.

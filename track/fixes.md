@@ -42,3 +42,11 @@ Records of fixes applied, what broke, and how it was resolved.
 **File:** `app.py:275, 277, 279, 300, 308, 319, 322`
 **What broke:** Interview LLM calls had no `print()` statements, so `app.log` showed nothing during the interview phase.
 **Fix:** Added 7 `print()` lines prefixed with `[INTERVIEW]` covering: first question generation (cache hit/miss), user message receipt, Gemma reply length, and profile capture. Also added `[SKELETON]` print for skeleton output.
+
+---
+
+## 2026-07-30 — Choice click causes blank screen when model outputs non-standard choice IDs
+
+**File:** `app.py:532-540`
+**What broke:** `on_choice` looked up choices by `c["id"] == cid` (string match against "a"/"b"/"c"). When the model output choices with non-standard IDs (e.g., integers "1"/"2"/"3" or different strings), the lookup failed → returned `*([H]*13)` hiding all UI components including tabs → blank screen. No API call, no log entry.
+**Fix:** Changed to positional lookup via `CID_IDX = {"a": 0, "b": 1, "c": 2}` — button A maps to `choices[0]`, B to `choices[1]`, C to `choices[2]`. Also added `[BLANK]` debug print if the path is still hit.
