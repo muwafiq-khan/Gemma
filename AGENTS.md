@@ -117,13 +117,46 @@ When modifying any file, you MUST verify that existing features still work. Afte
 4. Never assume a component renders when `visible=False` — Gradio 6 uses Svelte `{#if}` conditional rendering, so hidden components don't exist in the DOM at all. Use CSS hiding instead (`visible=True` + `position:fixed;left:-9999px`)
 5. For Gradio JS→Python bridges, prefer `gr.Textbox(visible=True)` with CSS hiding over `visible=False`
 
-## Critical Rule: Never Break Existing Functionality
-When modifying any file, you MUST verify that existing features still work. After every change:
-1. Run `python -m py_compile` on all modified files to check syntax
-2. Trace through the code flow to ensure old event handlers still fire, old state fields are still populated, and old UI interactions still work
-3. If you change the event-bridge mechanism (how HTML clicks talk to Python), test both directions: DOM click → JS → Gradio event → Python handler
-4. Never assume a component renders when `visible=False` — Gradio 6 uses Svelte `{#if}` conditional rendering, so hidden components don't exist in the DOM at all. Use CSS hiding instead (`visible=True` + `position:fixed;left:-9999px`)
-5. For Gradio JS→Python bridges, prefer `gr.Textbox(visible=True)` with CSS hiding over `visible=False`
+
+## Track Folder Protocol
+
+Every agent MUST follow these rules in EVERY response:
+
+### 1. Track Log (`track/track.md`)
+- After EVERY action (success or failure), write a 5-line summary.
+- Format: What happened, result (fix/fail/why), key context, internal flow (how you approached it), jargon explainer if needed.
+- Keep it short — 5 lines max, easy to understand.
+
+### 2. Critical Updates (`track/critical.md`)
+- Agent NEVER writes here without user permission.
+- If something feels critical (major fix, architecture change, root cause), ask user first.
+- If user says yes, write in broad terms: what happened, what you tried, success/failure, your thought process, internal flow in plain language.
+- If heavy jargon exists, write it AND provide a plain-language explainer right after.
+
+### 3. Fixes (`track/fixes.md`)
+- Log every fix: what broke, which file, what the fix was.
+- Keep it factual and brief.
+
+### 4. Bug Report (`track/bug_report.md`)
+- Track known bugs: ✅ FIXED or ❌ NOT YET FIXED.
+- When investigating a bug, read the codebase to confirm status — don't trust old entries blindly.
+- Update with evidence (file:line references) of what you found.
+
+### Writing Style Rules
+- Write like you're explaining to another human, not a machine.
+- If you must use a technical term, write it AND follow with a short plain-language explainer.
+- Example: "JS bridge (the JavaScript code that sends clicks from the webpage to Python) was broken."
+- No vague writeups. Be specific about what happened, where, and why.
+- When investigating whether a bug is fixed, do NOT rely on reading the current code alone. Use `git diff` or `git log` to compare against previous commits — this proves whether a fix actually landed vs just looking like it did.
+
+## Terminal Output Access
+The agent has NO way to see the user's terminal in real-time. User should run the app with logging:
+```
+python app.py 2>&1 | tee app.log
+```
+This writes ALL terminal output (prints, errors, tracebacks) to `app.log` while still showing on screen. The agent reads `app.log` to see errors, debug prints, and Python tracebacks using `Get-Content app.log -Tail 50` or `Read` tool.
+
+**Rule:** Whenever the user reports an error or something not working, the agent MUST immediately read `app.log` FIRST before asking any questions or making changes. Do not wait for the user to tell you to check the log — check it automatically on every error report.
 
 ## Winning Formula
 High Gemma Integration (30%) + High Innovation & Impact (30%) = **60% of score** before anything else. Priorities a solution where Gemma 4 is indispensable — this system achieves that by making Gemma 4 the narrative engine, challenge generator, evaluator, tutor, and adapter all in one.

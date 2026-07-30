@@ -11,6 +11,9 @@ from prompts import (
     scene_prompt,
     teaching_prompt,
     ending_prompt,
+    INTERVIEW_QUESTIONS,
+    INTERVIEW_JSON_FIELDS,
+    interview_json_schema,
 )
 
 import os
@@ -147,8 +150,9 @@ def _pregen_next(s, next_idx):
                 story_context=ctx,
                 upcoming_scenes_summary=json.dumps(snap["next_upcoming"]),
             )
-            reply = call_gemma(prompt, max_tokens=1024)
-            _store_pregen(key, next_idx, reply)
+            reply = call_gemma(prompt, max_tokens=4096)
+            if reply:
+                _store_pregen(key, next_idx, reply)
         except Exception:
             pass
     threading.Thread(target=_gen, daemon=True).start()
@@ -272,7 +276,11 @@ def build_app():
                         return gr.update(), "", gr.update(visible=False)
                     global _profile_first_q
                     if _profile_first_q is None:
+                        print("[INTERVIEW] Calling Gemma for first question (profile_interview_prompt)")
                         _profile_first_q = call_gemma(profile_interview_prompt())
+                        print(f"[INTERVIEW] First question received ({len(_profile_first_q)} chars)")
+                    else:
+                        print("[INTERVIEW] Using cached first question")
                     s["chat_history_started"] = True
                     return [{"role": "assistant", "content": _profile_first_q}], "", gr.update(visible=False)
 
@@ -293,6 +301,7 @@ def build_app():
                     if not history or len(history) == 0:
                         global _profile_first_q
                         if _profile_first_q is None:
+                            print("[INTERVIEW] First question call (chat_fn fallback)")
                             _profile_first_q = call_gemma(profile_interview_prompt())
                         history = [{"role": "assistant", "content": _profile_first_q}]
                         return history, "", H
@@ -300,25 +309,29 @@ def build_app():
                         return history, "", H
                     history.append({"role": "user", "content": msg})
                     ctx = "\n".join(f"{m['role']}: {m['content']}" for m in history)
+                    print(f"[INTERVIEW] User sent: {msg[:60]} — calling Gemma for continuation")
+                    q_list = "\n".join(f"{i+1}. {q}" for i, q in enumerate(INTERVIEW_QUESTIONS))
                     reply = call_gemma(
                         f"You are a friendly interviewer. Continue naturally.\n"
                         f"Conversation so far:\n{ctx}\n\n"
-                        f"Once you've asked about all 3 topics "
-                        f"(1=favorite movies/games, 2=easy DSA, 3=hard DSA), "
+                        f"Once you've asked about all {len(INTERVIEW_QUESTIONS)} topics:\n"
+                        f"{q_list}\n\n"
                         f"output this JSON and wrap up:\n"
-                        f'{{"favorites":[],"hooked_on":[],"dsa_strong":[],"dsa_weak":[]}}'
+                        f"{interview_json_schema()}"
                     )
-                    history.append({"role": "assistant", "content": reply})
                     p = parse_json(reply)
                     has_profile = p is not None and "favorites" in p
+                    print(f"[INTERVIEW] Gemma replied ({len(reply)} chars) — has_profile={has_profile}")
                     if has_profile:
                         s["user_profile"] = p
+                        print(f"[INTERVIEW] Profile captured: {json.dumps(p)}")
+                    history.append({"role": "assistant", "content": reply})
                     return history, "", gr.update(visible=has_profile)
 
                 send.click(fn=chat_fn, inputs=[inp, chat, state], outputs=[chat, inp, gen_btn])
 
                 def on_skip(s):
-                    s["user_profile"] = s.get("user_profile") or {"favorites":[],"hooked_on":[],"dsa_strong":[],"dsa_weak":[]}
+                    s["user_profile"] = s.get("user_profile") or {"favorites":[],"hooked_on":[],"dsa_strong":[],"dsa_weak":[],"crush":""}
                     return gr.update(visible=True)
 
                 skip_btn.click(fn=on_skip, inputs=[state], outputs=[gen_btn])
@@ -343,6 +356,7 @@ def build_app():
                             s["total_scenes"] = len(sk.get("scenes", []))
                             s["current_scene_index"] = 0
                             s["step"] = "playing"
+                            print(f"[SKELETON] Generated: {json.dumps(sk, indent=2)}")
                         if not sk:
                             s["total_scenes"] = 0
                             return (s, gr.update(selected=2), gr.update(value="## ⚠️ Could not parse story skeleton"),
@@ -471,11 +485,11 @@ def build_app():
                             story_context=ctx,
                             upcoming_scenes_summary=json.dumps(upcoming),
                         )
-                        reply = call_gemma(prompt, max_tokens=2048)
+                        reply = call_gemma(prompt, max_tokens=4096)
 
                     if not reply:
                         reply = f"[Empty response from API. Using fallback scene.]"
-                    print(f"[DEBUG] scene reply[:300]: {reply[:300]}")
+                    print(f"[DEBUG] scene reply chars={len(reply)} parse_json...")
                     sd = parse_json(reply)
                     if not sd:
                         print(f"[DEBUG] parse_json FAILED. Full reply:\n{reply}")

@@ -1,22 +1,39 @@
 import json
 
 
+INTERVIEW_QUESTIONS = [
+    "What movies or video games have they been HOOKED on in the past? (Probe: which ones made them feel deeply invested in the story?)",
+    "Which DSA topics do they find easy?",
+    "Which DSA topics do they find hard?",
+    "Whose ass do they like the most?",
+]
+
+INTERVIEW_JSON_FIELDS = {
+    "favorites": "[\"movie1\", \"movie2\", \"game1\"]",
+    "hooked_on": "[\"movie/game that immersed them\", \"...\"]",
+    "dsa_strong": "[\"topic1\", \"topic2\"]",
+    "dsa_weak": "[\"topic3\", \"topic4\"]",
+    "crush": "\"who they like\"",
+}
+
+
+def interview_questions_list():
+    return "\n".join(f"{i+1}. {q}" for i, q in enumerate(INTERVIEW_QUESTIONS))
+
+
+def interview_json_schema():
+    items = ",\n    ".join(f'"{k}": {v}' for k, v in INTERVIEW_JSON_FIELDS.items())
+    return "{\n    " + items + "\n}"
+
+
 def profile_interview_prompt():
-    return """You are a friendly interviewer building a user profile for an interactive story game.
+    return f"""You are a friendly interviewer building a user profile for an interactive story game.
 
 Ask the user these questions one at a time (conversationally):
-1. What movies or video games have they been HOOKED on in the past?
-   (Probe: which ones made them feel deeply invested in the story?)
-2. Which DSA topics do they find easy?
-3. Which DSA topics do they find hard?
+{interview_questions_list()}
 
-After they answer all 3, output a JSON profile:
-{
-    "favorites": ["movie1", "movie2", "game1"],
-    "hooked_on": ["movie/game that immersed them", "..."],
-    "dsa_strong": ["topic1", "topic2"],
-    "dsa_weak": ["topic3", "topic4"]
-}
+After they answer all {len(INTERVIEW_QUESTIONS)}, output a JSON profile:
+{interview_json_schema()}
 
 Be warm and engaging. React to their answers naturally before moving on."""
 
@@ -119,9 +136,16 @@ feel personally tailored to their taste.
 Generate this scene dynamically. Write cinematic prose that hooks the user.
 The scene should feel like a movie unfolding — vivid descriptions, tension, emotion.
 
+BUT also keep the prose **easy to read and follow**. Follow these readability rules:
+- Use **short paragraphs** (2-4 sentences each). Break long descriptions into smaller chunks.
+- Prefer **clean, simple sentence structures** over long winding clauses.
+- Use **plenty of dialogue** — characters talking makes the story feel faster and clearer.
+- Avoid overly ornate vocabulary. Keep language vivid but accessible.
+- Each paragraph should advance the scene — don't pad.
+
 Rules:
-1. Start with atmospheric prose setting the scene
-2. Include character dialogue where appropriate
+1. Start with a short atmospheric hook setting the scene
+2. Use character dialogue frequently to move the scene forward
 3. End with 2-3 meaningful choices for the user
 4. If has_challenge is true, one of the choices leads to a DSA challenge
 5. Reference past choices and character relationships naturally
