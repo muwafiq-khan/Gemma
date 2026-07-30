@@ -17,7 +17,9 @@ from prompts import (
 )
 
 import os
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "YOUR_API_KEY_HERE")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
+    raise RuntimeError("GOOGLE_API_KEY environment variable not set. Get one at https://aistudio.google.com/apikey")
 MODEL = "gemma-4-26b-a4b-it"
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
