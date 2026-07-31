@@ -127,6 +127,7 @@ def call_gemma(prompt, max_tokens=2048):
         return response.text or ""
     except Exception as e:
         msg = str(e)
+        print(f"[API ERROR] {msg[:500]}")
         if "API_KEY" in msg or "key" in msg.lower() and "invalid" in msg.lower():
             return "[Need a valid Google AI API key from https://aistudio.google.com/apikey]"
         return f"[API Error: {msg[:200]}]"
