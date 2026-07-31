@@ -8,4 +8,7 @@ todo
 idea_dump
 app.log
 app.err
-rag/
+rag/movies/
+rag/gaming/
+rag/stories/
+rag/patterns/
