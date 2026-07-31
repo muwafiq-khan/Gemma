@@ -17,7 +17,7 @@ from prompts import (
     pattern_extraction_prompt,
 )
 
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "").strip()
 if not GOOGLE_API_KEY:
     try:
         from local_config import GOOGLE_API_KEY as _local_key
@@ -129,7 +129,7 @@ def call_gemma(prompt, max_tokens=2048):
         msg = str(e)
         print(f"[API ERROR] {msg[:500]}")
         if "API_KEY" in msg or "key" in msg.lower() and "invalid" in msg.lower():
-            return "[Need a valid Google AI API key from https://aistudio.google.com/apikey]"
+            return f"[Need a valid Google AI API key from https://aistudio.google.com/apikey]\n\nRaw error: {msg[:400]}"
         return f"[API Error: {msg[:200]}]"
 
 
