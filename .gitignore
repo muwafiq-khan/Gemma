@@ -3,3 +3,9 @@ __pycache__/
 .env
 venv/
 .venv/
+local_config.py
+todo
+idea_dump
+app.log
+app.err
+rag/

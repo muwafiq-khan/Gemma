@@ -1,19 +1,45 @@
 import json
 
 
-INTERVIEW_QUESTIONS = [
-    "What movies or video games have they been HOOKED on in the past? (Probe: which ones made them feel deeply invested in the story?)",
-    "Which DSA topics do they find easy?",
-    "Which DSA topics do they find hard?",
-    "Whose ass do they like the most?",
+# ─── PHASE 1: MOVIE + GAME SEGMENTS (triggers web fetch) ───
+PHASE1_MOVIE_QUESTIONS = [
+    "What movie genres pull you in?",
+    "Name 2-3 movies you love. What did you like most about each?",
+    "What made those movies unique or exceptional in your eyes?",
+    "What type of characters do you love in movies? (anti-hero? mentor? villain?)",
+    "Which writers or directors do you admire — whose work would you binge?",
 ]
 
+PHASE1_GAME_QUESTIONS = [
+    "What game genres do you play?",
+    "Which games have gripped you the most? What was it about them?",
+    "What elements in a game attract you? (story, world-building, choices, loot, atmosphere)",
+    "Which game characters made you feel invested? Why?",
+]
+
+# ─── PHASE 2: CHARACTER SEGMENT (runs while web fetch is in background) ───
+PHASE2_CHARACTER_QUESTIONS = [
+    "What type of character do you want to BE in this story? (strategist? warrior? diplomat? detective?)",
+    "What fictional characters have you resonated with before? What about them hooked you?",
+    "What personalities do you get drawn to? (charisma? intellect? moral ambiguity?)",
+    "How do you make decisions under pressure — gut, logic, or emotion?",
+]
+
+INTERVIEW_QUESTIONS = PHASE1_MOVIE_QUESTIONS + PHASE1_GAME_QUESTIONS + PHASE2_CHARACTER_QUESTIONS
+
 INTERVIEW_JSON_FIELDS = {
-    "favorites": "[\"movie1\", \"movie2\", \"game1\"]",
-    "hooked_on": "[\"movie/game that immersed them\", \"...\"]",
-    "dsa_strong": "[\"topic1\", \"topic2\"]",
-    "dsa_weak": "[\"topic3\", \"topic4\"]",
-    "crush": "\"who they like\"",
+    "movies": {
+        "genres": '["sci-fi", "noir"]',
+        "favorites": '[{"title": "Inception", "what_liked": "...", "unique": "...", "characters_loved": "..."}]',
+        "character_types": '["anti-hero", "mentor with secrets"]',
+        "writers_directors": '["Christopher Nolan", "Denis Villeneuve"]',
+    },
+    "games": {
+        "genres": '["RPG", "immersive sim"]',
+        "favorites": '[{"title": "Disco Elysium", "hooked_by": "...", "unique": "...", "characters_loved": "..."}]',
+        "hooked_elements": '["branching narrative", "meaningful choices", "atmosphere"]',
+    },
+    "writers": '["writer1", "director1"]',
 }
 
 
@@ -21,29 +47,97 @@ def interview_questions_list():
     return "\n".join(f"{i+1}. {q}" for i, q in enumerate(INTERVIEW_QUESTIONS))
 
 
-def interview_json_schema():
-    items = ",\n    ".join(f'"{k}": {v}' for k, v in INTERVIEW_JSON_FIELDS.items())
+def _render_schema_entry(key, value):
+    if isinstance(value, dict):
+        inner = ",\n        ".join(f'"{ik}": {iv}' for ik, iv in value.items())
+        return f'"{key}": {{\n        {inner}\n    }}'
+    return f'"{key}": {value}'
+
+
+def interview_json_schema_partial():
+    items = ",\n    ".join(_render_schema_entry(k, v) for k, v in INTERVIEW_JSON_FIELDS.items())
     return "{\n    " + items + "\n}"
 
 
+def interview_json_schema_full():
+    partial = ",\n    ".join(_render_schema_entry(k, v) for k, v in INTERVIEW_JSON_FIELDS.items())
+    return (
+        "{\n    "
+        + partial
+        + ',\n    "character": {\n'
+        '        "wants_to_be": "e.g. strategist who outsmarts enemies",\n'
+        '        "resonated_with": ["Geralt of Rivia", "Cassandra Pentaghast"],\n'
+        '        "personality_traits": ["analytical", "morally flexible"],\n'
+        '        "decision_style": "calculated | gut | empathetic"\n'
+        "    }\n}"
+    )
+
+
+def interview_json_schema():
+    return interview_json_schema_full()
+
+
 def profile_interview_prompt():
-    return f"""You are a friendly interviewer building a user profile for an interactive story game.
+    return f"""You are a friendly interviewer building a rich user profile for an interactive story game. You interview the user in TWO phases.
 
-Ask the user these questions one at a time (conversationally):
-{interview_questions_list()}
+## PHASE 1 — Movie + Game segment
+Ask these questions one at a time, conversationally (react to their answers naturally before moving on):
+Movie questions:
+{chr(10).join(f"  {i+1}. {q}" for i, q in enumerate(PHASE1_MOVIE_QUESTIONS))}
+Game questions:
+{chr(10).join(f"  {i+6}. {q}" for i, q in enumerate(PHASE1_GAME_QUESTIONS))}
 
-After they answer all {len(INTERVIEW_QUESTIONS)}, output a JSON profile:
-{interview_json_schema()}
+After the user has answered the movie + game topics, output the PARTIAL profile JSON and then continue to Phase 2. Partial schema:
+{interview_json_schema_partial()}
 
-Be warm and engaging. React to their answers naturally before moving on."""
+## PHASE 2 — Character segment
+Continue asking, one at a time:
+{chr(10).join(f"  {i+10}. {q}" for i, q in enumerate(PHASE2_CHARACTER_QUESTIONS))}
+
+After Phase 2 topics are covered, output the FULL profile JSON and wrap up warmly. Full schema:
+{interview_json_schema_full()}
+
+## CRITICAL RULES
+1. If the user provides COMPLETE profile information in a single message (movies, games, writers AND character details — possibly as a JSON dict), do NOT ask any further questions. Acknowledge briefly and output the FULL profile JSON immediately.
+2. If the user says they're ready / wants to skip, output the FULL JSON with whatever information was collected (empty lists for missing fields).
+3. Never output JSON mid-conversation until a phase is complete.
+4. Be warm and engaging. The user is here to have fun."""
 
 
-def skeleton_prompt(card_info, topics_pool, user_profile_json):
+def pattern_extraction_prompt(title, source_type, content):
+    return f"""You are a narrative structure analyst. Analyze the content below about {title} ({source_type}).
+
+CONTENT:
+{content[:6000]}
+
+Extract these 5 structural patterns:
+1. structure — the story structure & pacing (e.g. "layered non-linear timeline", "slow-burn with cold open")
+2. tension_building — how tension is built (e.g. "cross-cutting with rising stakes", "information withholding")
+3. character_intro — how characters are introduced (e.g. "show expertise through action", "entrance with moral dilemma")
+4. dialogue — dialogue patterns (e.g. "exposition disguised as conflict", "sparse, laconic lines")
+5. devices — narrative devices used, as a list of short strings (e.g. "time pressure as pacing tool", "unreliable narrator")
+
+Output JSON with this shape:
+{{
+    "source": "{title}",
+    "type": "{source_type}",
+    "patterns": {{
+        "structure": "...",
+        "tension_building": "...",
+        "character_intro": "...",
+        "dialogue": "...",
+        "devices": ["device1", "device2"]
+    }}
+}}"""
+
+
+def skeleton_prompt(card_info, topics_pool, user_profile_json, pattern_learnings_json=None):
     title = card_info.get('title', 'Unknown')
     subtitle = card_info.get('subtitle', '')
     genre = card_info.get('genre', 'fantasy')
     hook = card_info.get('hook', '')
     topics_str = ", ".join(topics_pool)
+    patterns = pattern_learnings_json or "[]"
     return f"""Based on the card selection and user profile below, generate a story skeleton for an interactive movie-game experience.
 
 Card: {title} — {subtitle}
@@ -55,6 +149,16 @@ Available DSA Topics for This World (pick exactly 2 that feel natural to the plo
 
 User Profile (for style and character inspiration):
 {user_profile_json}
+
+Pattern Learnings from user's favorite writers/movies/games (structural techniques they love):
+{patterns}
+
+Apply these structural techniques to the story. For example:
+- If a pattern notes a non-linear timeline, mirror that structure
+- If a pattern notes environmental storytelling or information withholding, match it
+- Match the pacing, tension curve, character introduction style, and dialogue patterns
+- If the list is empty, use your own best judgment
+These techniques must blend naturally into the genre — never feel mechanical or copied.
 
 The story MUST:
 - Have 7-10 scenes total
@@ -104,7 +208,8 @@ Output ONLY a JSON skeleton:
 def scene_prompt(skeleton_summary, scene_id, beat, summary, has_challenge,
                  dsa_concept, narrative_history, knowledge_stats_json,
                  character_relationships_json, story_flags, hooked_on_references,
-                 story_context, upcoming_scenes_summary):
+                 story_context, upcoming_scenes_summary, pattern_learnings_json=None):
+    patterns = pattern_learnings_json or "[]"
     return f"""You are the narrative engine of an interactive movie-game.
 
 Story World:
@@ -131,6 +236,12 @@ Use these as inspiration: if the user loved Inception, channel that mind-bending
 atmosphere. If they loved The Dark Knight, bring moral tension. If they loved
 a specific game, borrow its pacing and dramatic beats. This makes the story
 feel personally tailored to their taste.
+
+Structural Pattern Learnings (from user's favorite writers/movies/games):
+{patterns}
+Apply them subtly to THIS scene: match the pacing, tension curve, character
+introduction style, and dialogue patterns. If the list is empty, use your own
+best judgment. Blend them with the genre — never mechanically or forced.
 
 ---
 Generate this scene dynamically. Write cinematic prose that hooks the user.

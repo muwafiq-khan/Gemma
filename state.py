@@ -2,10 +2,28 @@ def default_knowledge_stats():
     return {}
 
 
+def default_user_profile():
+    return {
+        "movies": {
+            "genres": [],
+            "favorites": [],
+            "character_types": [],
+            "writers_directors": [],
+        },
+        "games": {
+            "genres": [],
+            "favorites": [],
+            "hooked_elements": [],
+        },
+        "writers": [],
+        "character": {},
+    }
+
+
 def new_session():
     return {
         "step": "profile",
-        "user_profile": {},
+        "user_profile": default_user_profile(),
         "skeleton": {},
         "current_scene_index": 0,
         "total_scenes": 0,
@@ -20,4 +38,8 @@ def new_session():
         "teaching_context": "",
         "pending_challenge": None,
         "ending_generated": False,
+        "rag_fetch_status": "",
+        "rag_fetch_done": False,
+        "fetch_started": False,
+        "rag_patterns": [],
     }

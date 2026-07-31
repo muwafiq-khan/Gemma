@@ -1,31 +1,116 @@
 import json
-import re
+import os
 import threading
 from google import genai
 
 import gradio as gr
-from state import new_session
+from state import new_session, default_user_profile
+from utils import parse_json
+from rag.fetcher import fetch_from_profile
+from rag.analyzer import analyze_rag_content, save_patterns_to_disk
 from prompts import (
     profile_interview_prompt,
     skeleton_prompt,
     scene_prompt,
     teaching_prompt,
     ending_prompt,
-    INTERVIEW_QUESTIONS,
-    INTERVIEW_JSON_FIELDS,
-    interview_json_schema,
+    pattern_extraction_prompt,
 )
 
-import os
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 if not GOOGLE_API_KEY:
-    raise RuntimeError("GOOGLE_API_KEY environment variable not set. Get one at https://aistudio.google.com/apikey")
+    try:
+        from local_config import GOOGLE_API_KEY as _local_key
+        GOOGLE_API_KEY = _local_key
+    except ImportError:
+        pass
+if not GOOGLE_API_KEY:
+    raise RuntimeError("GOOGLE_API_KEY not set. Set the environment variable or create local_config.py (see README). Get a key at https://aistudio.google.com/apikey")
 MODEL = "gemma-4-26b-a4b-it"
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
 _pregen_cache = {}
 _pregen_lock = threading.Lock()
 _profile_first_q = None
+_fetch_events = {}
+
+
+def profile_refs(prof):
+    """Extract display names from rich profile. Handles dict segments
+    (movies {favorites, writers_directors}, games {favorites}) AND legacy lists."""
+    refs = []
+
+    def add(items):
+        for item in items or []:
+            if isinstance(item, dict):
+                title = (item.get("title") or "").strip()
+                if title:
+                    refs.append(title)
+            elif isinstance(item, str) and item.strip():
+                refs.append(item.strip())
+
+    movies = prof.get("movies")
+    if isinstance(movies, dict):
+        add(movies.get("favorites", []))
+        add(movies.get("writers_directors", []))
+    elif isinstance(movies, list):
+        add(movies)
+
+    games = prof.get("games")
+    if isinstance(games, dict):
+        add(games.get("favorites", []))
+    elif isinstance(games, list):
+        add(games)
+
+    add(prof.get("writers", []))
+    return refs
+
+
+def _merge_profile(s, p):
+    prof = s.get("user_profile") or {}
+    for k in ("movies", "games", "writers", "character"):
+        if k in p:
+            prof[k] = p[k]
+    s["user_profile"] = prof
+
+
+def _start_fetch(s):
+    if s.get("fetch_started"):
+        return
+    s["fetch_started"] = True
+    ev = threading.Event()
+    _fetch_events[id(s)] = ev
+    s["rag_fetch_status"] = "[SEARCH] Looking up your movies/games/writers..."
+
+    def analyze_status(msg):
+        s["rag_fetch_status"] = msg
+        print(f"[ANALYZE] {msg}")
+
+    def status_setter(msg):
+        s["rag_fetch_status"] = msg
+        print(f"[FETCH STATUS] {msg}")
+        if msg.startswith("[DONE]") and not s.get("rag_fetch_done"):
+            s["rag_fetch_status"] = "[ANALYZE] Extracting narrative patterns from fetched content..."
+            print("[ANALYZE] Extracting narrative patterns from fetched content...")
+            try:
+                s["rag_patterns"] = analyze_rag_content(
+                    status_setter=analyze_status,
+                    call_gemma=call_gemma,
+                    pattern_prompt=pattern_extraction_prompt,
+                )
+                save_patterns_to_disk(s["rag_patterns"])
+                print(f"[ANALYZER] s['rag_patterns'] now holds {len(s['rag_patterns'])} notes")
+            except Exception as e:
+                print(f"[ANALYZER] Analysis failed (continuing): {e}")
+            finally:
+                s["rag_fetch_done"] = True
+                s["rag_fetch_status"] = "[DONE] RAG + pattern analysis complete."
+                ev.set()
+        elif msg.startswith("[SKIP]"):
+            s["rag_fetch_done"] = True
+            ev.set()
+
+    fetch_from_profile(s["user_profile"], status_setter=status_setter, done_event=ev)
 
 
 def call_gemma(prompt, max_tokens=2048):
@@ -45,50 +130,6 @@ def call_gemma(prompt, max_tokens=2048):
         if "API_KEY" in msg or "key" in msg.lower() and "invalid" in msg.lower():
             return "[Need a valid Google AI API key from https://aistudio.google.com/apikey]"
         return f"[API Error: {msg[:200]}]"
-
-
-def parse_json(text):
-    if text is None:
-        return None
-    text = text.strip()
-    m = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    if m:
-        text = m.group(1).strip()
-    text = re.sub(r",\s*}", "}", text)
-    text = re.sub(r",\s*\]", "]", text)
-    for attempt in [json.loads, lambda t: json.JSONDecoder().raw_decode(t)[0]]:
-        try:
-            return attempt(text)
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-    start = text.find("{")
-    if start == -1:
-        start = text.find("[")
-    if start == -1:
-        return None
-    depth = 0
-    in_str = False
-    esc = False
-    end = -1
-    for i in range(start, len(text)):
-        ch = text[i]
-        if esc: esc = False; continue
-        if ch == "\\": esc = True; continue
-        if ch == '"': in_str = not in_str; continue
-        if in_str: continue
-        if ch in "{[": depth += 1
-        elif ch in "}]":
-            depth -= 1
-            if depth == 0: end = i + 1; break
-    if end == -1:
-        return None
-    try:
-        s = text[start:end]
-        s = re.sub(r",\s*}", "}", s)
-        s = re.sub(r",\s*\]", "]", s)
-        return json.loads(s)
-    except json.JSONDecodeError:
-        return None
 
 
 def _check_pregen(s, idx):
@@ -120,6 +161,7 @@ def _snapshot_state(s, next_idx):
         "character_relationships": dict(s.get("character_relationships", {})),
         "story_flags": list(s.get("story_flags", [])),
         "user_profile": dict(s.get("user_profile", {})),
+        "rag_patterns": list(s.get("rag_patterns", [])),
         "next_upcoming": upcoming[:2],
     }
 
@@ -131,7 +173,7 @@ def _pregen_next(s, next_idx):
             info = snap["scenes"][snap["current_scene_index"]]
             skel = {"title": s.get("skeleton", {}).get("title", ""), "genre": s.get("skeleton", {}).get("genre", "")}
             skel_summary = json.dumps(skel)
-            refs = json.dumps(snap["user_profile"].get("hooked_on", []) + snap["user_profile"].get("favorites", []))
+            refs = json.dumps(profile_refs(snap["user_profile"]))
             ctx = snap["story_context"]
             if len(ctx) > 1000:
                 ctx = "..." + ctx[-1000:]
@@ -151,6 +193,7 @@ def _pregen_next(s, next_idx):
                 hooked_on_references=refs,
                 story_context=ctx,
                 upcoming_scenes_summary=json.dumps(snap["next_upcoming"]),
+                pattern_learnings_json=json.dumps(snap.get("rag_patterns", [])),
             )
             reply = call_gemma(prompt, max_tokens=4096)
             if reply:
@@ -298,6 +341,7 @@ def build_app():
                     send = gr.Button("Send", variant="primary", scale=1)
                     skip_btn = gr.Button("Skip to story →", variant="secondary", scale=1)
                 gen_btn = gr.Button("✨ Dive Into Story", variant="primary", visible=False, size="lg")
+                fetch_status = gr.Markdown("", visible=True)
 
                 def chat_fn(msg, history, s):
                     if not history or len(history) == 0:
@@ -306,40 +350,86 @@ def build_app():
                             print("[INTERVIEW] First question call (chat_fn fallback)")
                             _profile_first_q = call_gemma(profile_interview_prompt())
                         history = [{"role": "assistant", "content": _profile_first_q}]
-                        return history, "", H
+                        return history, "", H, gr.update()
                     if not msg.strip():
-                        return history, "", H
+                        return history, "", H, gr.update()
                     history.append({"role": "user", "content": msg})
-                    ctx = "\n".join(f"{m['role']}: {m['content']}" for m in history)
-                    print(f"[INTERVIEW] User sent: {msg[:60]} — calling Gemma for continuation")
-                    q_list = "\n".join(f"{i+1}. {q}" for i, q in enumerate(INTERVIEW_QUESTIONS))
-                    reply = call_gemma(
-                        f"You are a friendly interviewer. Continue naturally.\n"
-                        f"Conversation so far:\n{ctx}\n\n"
-                        f"Once you've asked about all {len(INTERVIEW_QUESTIONS)} topics:\n"
-                        f"{q_list}\n\n"
-                        f"output this JSON and wrap up:\n"
-                        f"{interview_json_schema()}"
-                    )
-                    p = parse_json(reply)
-                    has_profile = p is not None and "favorites" in p
-                    print(f"[INTERVIEW] Gemma replied ({len(reply)} chars) — has_profile={has_profile}")
-                    if has_profile:
-                        s["user_profile"] = p
-                        print(f"[INTERVIEW] Profile captured: {json.dumps(p)}")
-                    history.append({"role": "assistant", "content": reply})
-                    return history, "", gr.update(visible=has_profile)
 
-                send.click(fn=chat_fn, inputs=[inp, chat, state], outputs=[chat, inp, gen_btn])
+                    dumped = parse_json(msg)
+                    is_dump = dumped is not None and any(
+                        k in dumped for k in ("movies", "games", "writers", "character")
+                    )
+
+                    if is_dump:
+                        _merge_profile(s, dumped)
+                        has_character = bool(dumped.get("character"))
+                        has_names = any(k in dumped for k in ("movies", "games", "writers"))
+                        if has_names:
+                            _start_fetch(s)
+                        if has_character:
+                            reply = ("✅ Profile locked in! The story engine knows your taste and is "
+                                     "researching your favorite movies/games/writers. "
+                                     "Click **✨ Dive Into Story** when ready.")
+                            gen_visible = gr.update(visible=True)
+                        else:
+                            reply = ("Got your movie and game tastes! One last piece: **what kind of "
+                                     "character do you want to be** in this story (strategist? warrior? "
+                                     "diplomat? detective?), or paste the full profile JSON including "
+                                     "the character section.")
+                            gen_visible = H
+                        print(f"[INTERVIEW] JSON dump captured — character={has_character}")
+                        status_ui = gr.update(value=s.get("rag_fetch_status", ""))
+                    else:
+                        ctx = "\n".join(f"{m['role']}: {m['content']}" for m in history)
+                        print(f"[INTERVIEW] User sent: {msg[:60]} — calling Gemma for continuation")
+                        reply = call_gemma(
+                            profile_interview_prompt()
+                            + "\n\nConversation so far:\n"
+                            + ctx
+                            + "\n\nContinue the interview naturally. Follow the phase and JSON output rules above."
+                        )
+                        p = parse_json(reply)
+                        has_character = bool(p and p.get("character"))
+                        has_partial = bool(p and any(k in p for k in ("movies", "games", "writers")))
+                        if p:
+                            _merge_profile(s, p)
+                            print(f"[INTERVIEW] Gemma profile: character={has_character} partial={has_partial}")
+                        if has_partial and not s.get("fetch_started"):
+                            _start_fetch(s)
+                        gen_visible = gr.update(visible=has_character)
+                        status_ui = gr.update(value=s.get("rag_fetch_status", ""))
+
+                    history.append({"role": "assistant", "content": reply})
+                    return history, "", gen_visible, status_ui
+
+                send.click(fn=chat_fn, inputs=[inp, chat, state], outputs=[chat, inp, gen_btn, fetch_status])
 
                 def on_skip(s):
-                    s["user_profile"] = s.get("user_profile") or {"favorites":[],"hooked_on":[],"dsa_strong":[],"dsa_weak":[],"crush":""}
-                    return gr.update(visible=True)
+                    if not s.get("user_profile"):
+                        s["user_profile"] = default_user_profile()
+                    s["rag_fetch_status"] = "[SKIP] No web search (skipped interview)."
+                    return gr.update(visible=True), gr.update(value=s["rag_fetch_status"])
 
-                skip_btn.click(fn=on_skip, inputs=[state], outputs=[gen_btn])
+                skip_btn.click(fn=on_skip, inputs=[state], outputs=[gen_btn, fetch_status])
+
+                last_fetch_status = {"v": ""}
+
+                def poll_fetch_status(s):
+                    v = s.get("rag_fetch_status", "")
+                    if v and v != last_fetch_status["v"]:
+                        last_fetch_status["v"] = v
+                        return gr.update(value=v)
+                    return gr.update()
+
+                fetch_timer = gr.Timer(1, active=True)
+                fetch_timer.tick(fn=poll_fetch_status, inputs=[state], outputs=[fetch_status])
 
                 def on_generate(s):
                     try:
+                        ev = _fetch_events.get(id(s))
+                        if ev and not s.get("rag_fetch_done"):
+                            s["rag_fetch_status"] = "[WAIT] Finishing web search before story generation..."
+                            ev.wait(timeout=180)
                         s["step"] = "skeleton"
                         ci = s.get("card_info", {})
                         if not ci:
@@ -347,7 +437,8 @@ def build_app():
                                     H, H, H, H, H, H, H, H, H, H, H, gr.update())
                         topics = ci.get("topics", [])
                         pj = json.dumps(s.get("user_profile", {}))
-                        reply = call_gemma(skeleton_prompt(ci, topics, pj), max_tokens=3072)
+                        pl = json.dumps(s.get("rag_patterns", []))
+                        reply = call_gemma(skeleton_prompt(ci, topics, pj, pl), max_tokens=4096)
                         if reply.startswith("[Need a valid") or reply.startswith("[API Error"):
                             return (s, gr.update(selected=2), gr.update(value="## ⚠️ API Error"),
                                     gr.update(value=reply), H, H, H, H, H, H, H, H,
@@ -459,7 +550,7 @@ def build_app():
                     info = scenes[idx]
                     prof = s.get("user_profile", {})
                     skel = s.get("skeleton", {})
-                    refs = json.dumps(prof.get("hooked_on", []) + prof.get("favorites", []))
+                    refs = json.dumps(profile_refs(prof))
 
                     reply = _check_pregen(s, idx)
                     if reply is None:
@@ -483,11 +574,12 @@ def build_app():
                             knowledge_stats_json=json.dumps(s.get("knowledge_stats", {})),
                             character_relationships_json=json.dumps(s.get("character_relationships", {})),
                             story_flags=json.dumps(s.get("story_flags", [])),
-                            hooked_on_references=refs,
-                            story_context=ctx,
-                            upcoming_scenes_summary=json.dumps(upcoming),
-                        )
-                        reply = call_gemma(prompt, max_tokens=4096)
+                        hooked_on_references=refs,
+                        story_context=ctx,
+                        upcoming_scenes_summary=json.dumps(upcoming),
+                        pattern_learnings_json=json.dumps(s.get("rag_patterns", [])),
+                    )
+                    reply = call_gemma(prompt, max_tokens=4096)
 
                     if not reply:
                         reply = f"[Empty response from API. Using fallback scene.]"
