@@ -1,5 +1,11 @@
 # GemmaQuest
 
+🎮 **Where code becomes story** — an interactive movie-game-education hybrid powered by Gemma 4. Your favorite movies/games/writers are researched in real time, their structural patterns are extracted by Gemma, and your story is built to mirror your taste.
+
+## 🎮 Play the demo
+
+Live at **Render free tier** (URL pending — see track log). Pick a story card → answer a few questions (or paste a profile JSON) → the engine researches your taste → you play your personalized story.
+
 ## Setup on a new machine
 
 ```powershell

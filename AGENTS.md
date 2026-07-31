@@ -108,7 +108,7 @@ These stats feed back into Gemma 4 prompts to personalize upcoming scenes.
 - Non-LLM tooling OK: CV, OCR, speech, vector DBs, APIs
 - Public GitHub repo + live/recorded demo required
 - Writeup ≤ 1500 words
-- No GPU, no credit card (using Hugging Face Inference API or Kaggle)
+- No GPU, no credit card (hosted on Render free tier; Gemma 4 via Google AI API key — key in Render dashboard env var / local_config.py, never in GitHub)
 - Build deadline: 3 hours for working prototype
 
 ## Critical Rule: Never Execute Without Permission

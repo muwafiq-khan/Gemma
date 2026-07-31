@@ -1,5 +1,15 @@
 # Track Log
 
+## 2026-07-31 — Deployment: Render free tier (HF Spaces blocked)
+
+**What happened:** Attempted HF Spaces deployment — BLOCKED: `402 Payment Required` — Gradio/Docker Spaces on free cpu-basic now require PRO subscription (credit card), violating the no-card constraint. Researched alternatives (websearch, 2026 sources): Render free tier confirmed — no credit card (GitHub signup), 750 hrs/month (enough for 24/7), 512MB RAM, env vars free, git-push deploy, sleeps after 15 min idle (~30-60s cold start). User approved the pivot (HF → Render). Code change: `app.py` launch now reads `PORT` env + binds `0.0.0.0`, `debug=not on_render` (avoids reloader subprocess on Render). Pushed (`8137fd4`).
+
+**Status:** User created Render web service from repo (build+start commands set), paused before Deploy — waiting for my code push (done). Next: user adds `GOOGLE_API_KEY` env var in Render dashboard (key NEVER in repo — gitignored `local_config.py` + verified clean), hits Deploy, then live URL test end-to-end (fetch → analyze → skeleton → scenes).
+
+**Decisions:** No render.yaml blueprint (keeps secrets out of repo — env vars only via dashboard). HF token `gemmadeploy` unused → recommend revoke. AGENTS.md constraint line updated: "Hugging Face Inference API or Kaggle" → Render free tier + Google AI API.
+
+**Known next:** live test on Render URL; keep-alive protocol for judging week (visit 5 min before demo; cold start 30-60s).
+
 ## 2026-07-31 — BUILD_SPEC doc sync (3 stale spots fixed)
 
 **What happened:** Audit of BUILD_SPEC.md vs actual code found 3 stale spots: file-structure tree missing `rag/patterns/` folder, Analyzer Design section missing the disk-persistence note, and the "stale files cleared per session" line missing patterns.json. All 3 fixed with one-line edits. No code changes.
