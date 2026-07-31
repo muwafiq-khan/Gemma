@@ -751,4 +751,13 @@ if __name__ == "__main__":
 
     print(f"[+] Using {MODEL} with Google AI API")
 
-    app.launch(debug=True, share=False, theme=gr.themes.Soft(primary_hue="blue"), css=CSS)
+    on_render = bool(os.environ.get("RENDER"))
+    port = int(os.environ.get("PORT", "7860"))
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=port,
+        debug=not on_render,
+        share=False,
+        theme=gr.themes.Soft(primary_hue="blue"),
+        css=CSS,
+    )
