@@ -1,5 +1,7 @@
 # GemmaQuest
 
+try live: https://gemma-1.onrender.com/
+
 🎮 **Where code becomes story** — an interactive movie-game-education hybrid where the user is the protagonist and Data Structures & Algorithms are the gameplay. Built for the *Build with Gemma 4* hackathon — Gemma 4 is the narrative engine, not a bolted-on chatbot.
 
 **The core insight:** Learning isn't a separate activity or a reward — it *is* the gameplay. You must solve DSA problems to survive the story, giving learning immediate purpose and emotional stakes. Get an answer wrong? The story doesn't end — it takes a **darker turn** and adapts, exactly like a movie with consequences.
