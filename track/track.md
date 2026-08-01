@@ -1,5 +1,23 @@
 # Track Log
 
+## 2026-08-01 — Edit: new session start wipes old session files instantly
+
+**What happened:** User's rule simplified to "whenever a new session starts, old files get wiped out" (replaces waiting for the 1h sweeper grace).
+
+**Result:** `utils.py` gained `wipe_old_sessions()` — called from `new_session()` in state.py (Gradio invokes the state factory per session lazily on first state access — verified in gradio's state_holder source), so every new session start instantly deletes all other sessions' `rag/sessions/<sid>/` folders + `logs/<sid>.log`. Sessions with activity in the last 15 min (`ACTIVE_WINDOW`) are protected so a concurrently-playing user's fetch/story is never broken. `on_play_again` triggers it too (it calls `new_session()`). The 10-min sweeper (1h grace) and 24h orphan sweep remain as backups. Verified: wipe test — active session's files survive, dead sessions' folders+logs deleted; py_compile + Gradio build pass.
+
+**Files:** utils.py (`wipe_old_sessions`, ACTIVE_WINDOW), state.py (`new_session` calls wipe)
+
+## 2026-08-01 — Feature: per-user session logs + session-end file cleanup (local + Render)
+
+**What happened:** User wanted (1) every user's interview Q&A + fetch/analyze activity visible in Render Logs like the local terminal, (2) to verify downloaded websearch files (where they are + first line preview), (3) files deleted when a user's session ends, on local AND Render.
+
+**Result:** Built. (1) `state.py` adds `sid` (uuid) to every session; `utils.py` gains `slog()` — prints `[SID=xxxx]` lines to stdout (Render Logs, filterable per user) AND appends to `logs/<sid>.log` with timestamps. All app print sites routed through it with CONTENT: interview user msgs + Gemma replies, skeleton, scene replies (600-char clip), pregen hits, tutor Q&A, ending, fetch/analyze statuses. (2) `rag/fetcher.py` saves per session into `rag/sessions/<sid>/{movies,gaming,stories}/` and after every save logs `[FETCHER] Saved: <full path> (<bytes> B) — first line: <Title line>` (first line only, per user request — no 600-char dumps). (3) Session-end cleanup: `rag/analyzer.py` + fetcher read/write only the session's own folder; sweeper daemon (`start_sweeper()` in `__main__`, runs every 10 min on local AND Render) deletes a session's folder + log after 1h of no activity (= user closed tab), 24h orphan safety net, plus `on_play_again` deletes instantly. Free Render has no file browser, so Render Logs is the only window into fetched files — verified content is real via the first-line preview.
+
+**Files:** state.py (sid), utils.py (slog/session_dir/cleanup_session/sweep_once/start_sweeper), rag/fetcher.py (session dirs, saved-file line w/ first-line preview, no more global _clear_subdirs), rag/analyzer.py (session-scoped _list_files/_type_from_dir, sid logs), app.py (all prints → slog, _start_fetch session_dir, play-again cleanup, start_sweeper), .gitignore (logs/, rag/sessions/).
+
+**Verified:** py_compile all; smoke test passed — slog writes + clips to logs/<sid>.log, fetcher first-line preview, analyzer extracts from session dir only, cleanup_session deletes folder+log, orphan sweep removes 25h-old folder; app import + Gradio build OK. **Note:** local old rag/{movies,gaming,stories} files from prior tests are now legacy — the old global dirs are no longer read/written.
+
 ## 2026-08-01 — Bug B regressed on Render → committed + pushed all pending fixes
 
 **What happened:** User hit `UnboundLocalError: 'prompt'` at app.py:583 on Render right after scene 1 + first choice click. NOT a new bug — Bug B's fix lived only in the local working tree (bug_report.md even warned "commit + push still pending"). Render deploys from GitHub; last commit `8e7fec6` still had `call_gemma(prompt)` OUTSIDE the `if reply is None:` block (verified via `git show HEAD:app.py` lines 557-583). Also investigated user's earlier "crash at story generation" report — that TypeError is Bug C (parse_json returns int for bare-number messages; can only fire from the interview Send button; logged as UNDER OBSERVATION per user).

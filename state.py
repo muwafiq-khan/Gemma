@@ -1,3 +1,8 @@
+import uuid
+
+from utils import wipe_old_sessions
+
+
 def default_knowledge_stats():
     return {}
 
@@ -21,7 +26,10 @@ def default_user_profile():
 
 
 def new_session():
+    # Every new session starts with a clean slate: wipe files of ended sessions.
+    wipe_old_sessions()
     return {
+        "sid": uuid.uuid4().hex[:10],
         "step": "profile",
         "user_profile": default_user_profile(),
         "skeleton": {},

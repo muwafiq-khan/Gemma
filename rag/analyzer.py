@@ -2,7 +2,7 @@ import glob
 import json
 import os
 
-from utils import parse_json
+from utils import parse_json, slog
 
 RAG_DIR = os.path.join(os.path.dirname(__file__), "..", "rag")
 SUB_TYPES = {"movies": "movie", "gaming": "game", "stories": "writer"}
@@ -25,10 +25,15 @@ def save_patterns_to_disk(patterns, path=None):
         return None
 
 
-def _list_files():
+def _base_dir(session_dir):
+    return session_dir or RAG_DIR
+
+
+def _list_files(session_dir=None):
+    base = _base_dir(session_dir)
     files = []
     for sub in SUB_TYPES:
-        files += sorted(glob.glob(os.path.join(RAG_DIR, sub, "*.txt")))
+        files += sorted(glob.glob(os.path.join(base, sub, "*.txt")))
     return files
 
 
@@ -47,8 +52,8 @@ def _title_from_file(fp):
     return os.path.splitext(os.path.basename(fp))[0]
 
 
-def _type_from_dir(fp):
-    rel = os.path.relpath(fp, RAG_DIR)
+def _type_from_dir(fp, session_dir=None):
+    rel = os.path.relpath(fp, _base_dir(session_dir))
     sub = rel.split(os.sep)[0] if os.sep in rel else os.path.dirname(rel)
     return SUB_TYPES.get(sub, "unknown")
 
@@ -64,28 +69,34 @@ def _read_content(fp):
         return ""
 
 
-def analyze_rag_content(status_setter=None, call_gemma=None, pattern_prompt=None):
-    """Analyze rag/*.txt and RETURN the extracted pattern notes (list of dicts).
-    Does not touch any state — the caller decides where to store the result."""
-    files = _list_files()
+def analyze_rag_content(session_dir=None, status_setter=None, call_gemma=None,
+                        pattern_prompt=None, sid=None):
+    """Analyze the session's rag/*.txt and RETURN the extracted pattern notes
+    (list of dicts). Does not touch any state — the caller decides where to
+    store the result."""
+    files = _list_files(session_dir)
     usable = [f for f in files if _read_content(f)]
     if not usable:
+        msg = "[ANALYZE] No rag content to analyze."
         if status_setter:
-            status_setter("[ANALYZE] No rag content to analyze.")
+            status_setter(msg)
+        slog(sid, msg)
         return []
 
     patterns = []
     total = min(len(usable), MAX_FILES)
     for i, fp in enumerate(usable[:MAX_FILES]):
         title = _title_from_file(fp)
-        stype = _type_from_dir(fp)
+        stype = _type_from_dir(fp, session_dir)
+        status_msg = f"[ANALYZE] Extracting patterns from {title} ({i+1}/{total})..."
         if status_setter:
-            status_setter(f"[ANALYZE] Extracting patterns from {title} ({i+1}/{total})...")
+            status_setter(status_msg)
+        slog(sid, status_msg)
         try:
             prompt = pattern_prompt(title, stype, _read_content(fp))
             reply = call_gemma(prompt, max_tokens=2048)
         except Exception as e:
-            print(f"[ANALYZER] Failed on {fp}: {e}")
+            slog(sid, f"[ANALYZER] Failed on {fp}: {e}")
             continue
         p = parse_json(reply)
         if p and isinstance(p, dict) and p.get("patterns"):
@@ -93,9 +104,9 @@ def analyze_rag_content(status_setter=None, call_gemma=None, pattern_prompt=None
             p["type"] = p.get("type") or stype
             patterns.append(p)
         else:
-            print(f"[ANALYZER] Skipped {fp} — unparseable reply ({len(reply)} chars)")
+            slog(sid, f"[ANALYZER] Skipped {fp} — unparseable reply ({len(reply)} chars)")
 
-    print(f"[ANALYZER] Extracted {len(patterns)} pattern notes (returned, not stored).")
+    slog(sid, f"[ANALYZER] Extracted {len(patterns)} pattern notes (returned, not stored).")
     if status_setter:
         status_setter(f"[ANALYZE] Done — {len(patterns)} pattern notes extracted.")
     return patterns

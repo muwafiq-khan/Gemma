@@ -5,7 +5,7 @@ from google import genai
 
 import gradio as gr
 from state import new_session, default_user_profile
-from utils import parse_json
+from utils import parse_json, slog, _clip, cleanup_session, start_sweeper, session_dir
 from rag.fetcher import fetch_from_profile
 from rag.analyzer import analyze_rag_content, save_patterns_to_disk
 from prompts import (
@@ -78,30 +78,34 @@ def _start_fetch(s):
     if s.get("fetch_started"):
         return
     s["fetch_started"] = True
+    sid = s.get("sid", "")
     ev = threading.Event()
     _fetch_events[id(s)] = ev
     s["rag_fetch_status"] = "[SEARCH] Looking up your movies/games/writers..."
+    s["session_dir"] = session_dir(sid)
 
     def analyze_status(msg):
         s["rag_fetch_status"] = msg
-        print(f"[ANALYZE] {msg}")
+        slog(sid, f"[ANALYZE] {msg}")
 
     def status_setter(msg):
         s["rag_fetch_status"] = msg
-        print(f"[FETCH STATUS] {msg}")
+        slog(sid, f"[FETCH STATUS] {msg}")
         if msg.startswith("[DONE]") and not s.get("rag_fetch_done"):
             s["rag_fetch_status"] = "[ANALYZE] Extracting narrative patterns from fetched content..."
-            print("[ANALYZE] Extracting narrative patterns from fetched content...")
+            slog(sid, "[ANALYZE] Extracting narrative patterns from fetched content...")
             try:
                 s["rag_patterns"] = analyze_rag_content(
+                    session_dir=s["session_dir"],
                     status_setter=analyze_status,
                     call_gemma=call_gemma,
                     pattern_prompt=pattern_extraction_prompt,
+                    sid=sid,
                 )
-                save_patterns_to_disk(s["rag_patterns"])
-                print(f"[ANALYZER] s['rag_patterns'] now holds {len(s['rag_patterns'])} notes")
+                save_patterns_to_disk(s["rag_patterns"], path=os.path.join(s["session_dir"], "patterns.json"))
+                slog(sid, f"[ANALYZER] s['rag_patterns'] now holds {len(s['rag_patterns'])} notes")
             except Exception as e:
-                print(f"[ANALYZER] Analysis failed (continuing): {e}")
+                slog(sid, f"[ANALYZER] Analysis failed (continuing): {e}")
             finally:
                 s["rag_fetch_done"] = True
                 s["rag_fetch_status"] = "[DONE] RAG + pattern analysis complete."
@@ -110,7 +114,8 @@ def _start_fetch(s):
             s["rag_fetch_done"] = True
             ev.set()
 
-    fetch_from_profile(s["user_profile"], status_setter=status_setter, done_event=ev)
+    fetch_from_profile(s["user_profile"], session_dir=s["session_dir"],
+                       status_setter=status_setter, done_event=ev, sid=sid)
 
 
 def call_gemma(prompt, max_tokens=2048):
@@ -322,11 +327,11 @@ def build_app():
                         return gr.update(), "", gr.update(visible=False)
                     global _profile_first_q
                     if _profile_first_q is None:
-                        print("[INTERVIEW] Calling Gemma for first question (profile_interview_prompt)")
+                        slog(s.get("sid", ""), "[INTERVIEW] Calling Gemma for first question (profile_interview_prompt)")
                         _profile_first_q = call_gemma(profile_interview_prompt())
-                        print(f"[INTERVIEW] First question received ({len(_profile_first_q)} chars)")
+                        slog(s.get("sid", ""), f"[INTERVIEW] First question received ({len(_profile_first_q)} chars): {_clip(_profile_first_q)}")
                     else:
-                        print("[INTERVIEW] Using cached first question")
+                        slog(s.get("sid", ""), "[INTERVIEW] Using cached first question")
                     s["chat_history_started"] = True
                     return [{"role": "assistant", "content": _profile_first_q}], "", gr.update(visible=False)
 
@@ -345,16 +350,19 @@ def build_app():
                 fetch_status = gr.Markdown("", visible=True)
 
                 def chat_fn(msg, history, s):
+                    sid = s.get("sid", "")
                     if not history or len(history) == 0:
                         global _profile_first_q
                         if _profile_first_q is None:
-                            print("[INTERVIEW] First question call (chat_fn fallback)")
+                            slog(sid, "[INTERVIEW] First question call (chat_fn fallback)")
                             _profile_first_q = call_gemma(profile_interview_prompt())
+                            slog(sid, f"[INTERVIEW] First question received ({len(_profile_first_q)} chars): {_clip(_profile_first_q)}")
                         history = [{"role": "assistant", "content": _profile_first_q}]
                         return history, "", H, gr.update()
                     if not msg.strip():
                         return history, "", H, gr.update()
                     history.append({"role": "user", "content": msg})
+                    slog(sid, f"[INTERVIEW] User sent ({len(msg)} chars): {_clip(msg)}")
 
                     dumped = parse_json(msg)
                     is_dump = dumped is not None and any(
@@ -378,23 +386,24 @@ def build_app():
                                      "diplomat? detective?), or paste the full profile JSON including "
                                      "the character section.")
                             gen_visible = H
-                        print(f"[INTERVIEW] JSON dump captured — character={has_character}")
+                        slog(sid, f"[INTERVIEW] JSON dump captured — character={has_character}")
                         status_ui = gr.update(value=s.get("rag_fetch_status", ""))
                     else:
                         ctx = "\n".join(f"{m['role']}: {m['content']}" for m in history)
-                        print(f"[INTERVIEW] User sent: {msg[:60]} — calling Gemma for continuation")
+                        slog(sid, "[INTERVIEW] Calling Gemma for continuation")
                         reply = call_gemma(
                             profile_interview_prompt()
                             + "\n\nConversation so far:\n"
                             + ctx
                             + "\n\nContinue the interview naturally. Follow the phase and JSON output rules above."
                         )
+                        slog(sid, f"[INTERVIEW] Gemma reply ({len(reply)} chars): {_clip(reply)}")
                         p = parse_json(reply)
                         has_character = bool(p and p.get("character"))
                         has_partial = bool(p and any(k in p for k in ("movies", "games", "writers")))
                         if p:
                             _merge_profile(s, p)
-                            print(f"[INTERVIEW] Gemma profile: character={has_character} partial={has_partial}")
+                            slog(sid, f"[INTERVIEW] Gemma profile: character={has_character} partial={has_partial}")
                         if has_partial and not s.get("fetch_started"):
                             _start_fetch(s)
                         gen_visible = gr.update(visible=has_character)
@@ -409,6 +418,7 @@ def build_app():
                     if not s.get("user_profile"):
                         s["user_profile"] = default_user_profile()
                     s["rag_fetch_status"] = "[SKIP] No web search (skipped interview)."
+                    slog(s.get("sid", ""), "[SKIP] No web search (skipped interview).")
                     return gr.update(visible=True), gr.update(value=s["rag_fetch_status"])
 
                 skip_btn.click(fn=on_skip, inputs=[state], outputs=[gen_btn, fetch_status])
@@ -450,14 +460,16 @@ def build_app():
                             s["total_scenes"] = len(sk.get("scenes", []))
                             s["current_scene_index"] = 0
                             s["step"] = "playing"
-                            print(f"[SKELETON] Generated: {json.dumps(sk, indent=2)}")
+                            slog(s.get("sid", ""), f"[SKELETON] Generated ({len(sk.get('scenes', []))} scenes): {json.dumps(sk, indent=2)}")
                         if not sk:
                             s["total_scenes"] = 0
+                            slog(s.get("sid", ""), f"[SKELETON] Could not parse skeleton. Raw: {reply[:1000]}")
                             return (s, gr.update(selected=2), gr.update(value="## ⚠️ Could not parse story skeleton"),
                                     gr.update(value=f"The story engine returned unexpected output. Please try again.\n\nRaw output:\n```\n{reply[:1000]}\n```"),
                                     H, H, H, H, H, H, H, H, gr.update(), gr.update(), gr.update())
                         return gen_scene(s)
                     except Exception as e:
+                        slog(s.get("sid", ""), f"[ERROR] on_generate: {e}")
                         return (s, gr.update(selected=2), gr.update(value="## ⚠️ Error"),
                                 gr.update(value=f"An error occurred:\n```\n{str(e)}\n```"),
                                 H, H, H, H, H, H, H, H, gr.update(), gr.update(), gr.update())
@@ -540,6 +552,7 @@ def build_app():
                                 story_flags=json.dumps(s.get("story_flags", [])),
                             )
                             ending_text = call_gemma(prompt, max_tokens=2048)
+                            slog(s.get("sid", ""), f"[ENDING] Generated ({len(ending_text)} chars): {_clip(ending_text)}")
                             s["ending_generated"] = True
                             ks = render_knowledge(s)
                             full = f"{ending_text}\n\n---\n## Your Journey\n\n{ks}"
@@ -582,14 +595,14 @@ def build_app():
                         )
                         reply = call_gemma(prompt, max_tokens=4096)
                     else:
-                        print(f"[PREGEN] scene {idx} cache hit (background thread)")
+                        slog(s.get("sid", ""), f"[PREGEN] scene {idx} cache hit (background thread)")
 
                     if not reply:
                         reply = f"[Empty response from API. Using fallback scene.]"
-                    print(f"[DEBUG] scene reply chars={len(reply)} parse_json...")
+                    slog(s.get("sid", ""), f"[SCENE {idx}] reply ({len(reply)} chars): {_clip(reply)}")
                     sd = parse_json(reply)
                     if not sd:
-                        print(f"[DEBUG] parse_json FAILED. Full reply:\n{reply}")
+                        slog(s.get("sid", ""), f"[SCENE {idx}] parse_json FAILED. Full reply:\n{reply}")
                     if not sd:
                         sd = {"prose": reply, "choices": [{"id": "a", "text": "Continue", "type": "narrative"}],
                               "challenge": None, "show_learn_button": False, "atmosphere": "mysterious"}
@@ -622,6 +635,7 @@ def build_app():
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
+                    slog(s.get("sid", ""), f"[ERROR] gen_scene: {e}")
                     return (s, gr.update(selected=2), gr.update(value="## ⚠️ Error in Scene"),
                             gr.update(value=f"An error occurred generating this scene:\n```\n{str(e)}\n```"),
                             H, H, H, H, H, H, H, H, gr.update(), gr.update(), gr.update())
@@ -634,7 +648,7 @@ def build_app():
                 idx = CID_IDX.get(cid)
                 chosen = choices[idx] if idx is not None and idx < len(choices) else None
                 if not chosen:
-                    print(f"[BLANK] on_choice(cid={cid}) — scene_data keys={list(sd.keys())}, choices={choices}")
+                    slog(s.get("sid", ""), f"[BLANK] on_choice(cid={cid}) — scene_data keys={list(sd.keys())}, choices={choices}")
                     return s, *([H]*13), gr.update()
 
                 s["narrative_history"].append({
@@ -713,6 +727,7 @@ def build_app():
 
             # ── Tutor chat ──
             def on_tutor(msg, history, s):
+                sid = s.get("sid", "")
                 concept = s.get("teaching_context", "the concept")
                 if not history or len(history) == 0:
                     ch = s.get("pending_challenge") or {}
@@ -723,12 +738,15 @@ def build_app():
                         concept_stats=json.dumps(s["knowledge_stats"].get(concept, {})),
                     )
                     reply = call_gemma(prompt)
+                    slog(sid, f"[TUTOR] Opening lesson ({len(reply)} chars): {_clip(reply)}")
                     return [{"role": "assistant", "content": reply}], ""
                 if not msg.strip():
                     return history, ""
                 history.append({"role": "user", "content": msg})
+                slog(sid, f"[TUTOR] User ({len(msg)} chars): {_clip(msg)}")
                 ctx = "\n".join(f"{m['role']}: {m['content']}" for m in history)
                 reply = call_gemma(f"You are a DSA tutor. Continue teaching {concept}.\n{ctx}\n\nRespond helpfully.")
+                slog(sid, f"[TUTOR] Reply ({len(reply)} chars): {_clip(reply)}")
                 history.append({"role": "assistant", "content": reply})
                 return history, ""
 
@@ -743,6 +761,7 @@ def build_app():
 
             # ── Play again ──
             def on_play_again(s):
+                cleanup_session(s.get("sid", ""))
                 return new_session(), gr.update(selected=0)
 
             pa.click(fn=on_play_again, inputs=[state], outputs=[state, tabs])
@@ -754,6 +773,7 @@ if __name__ == "__main__":
     app = build_app()
 
     print(f"[+] Using {MODEL} with Google AI API")
+    start_sweeper()
 
     on_render = bool(os.environ.get("RENDER"))
     port = int(os.environ.get("PORT", "7860"))

@@ -1,4 +1,5 @@
 import os
+import shutil
 import threading
 import re
 import time
@@ -7,13 +8,14 @@ import requests
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 
-from rag.analyzer import PATTERNS_FILE
+from utils import slog
 
 RAG_DIR = os.path.join(os.path.dirname(__file__), "..", "rag")
-SUBDIRS = {
-    "movies": os.path.join(RAG_DIR, "movies"),
-    "games": os.path.join(RAG_DIR, "gaming"),
-    "writers": os.path.join(RAG_DIR, "stories"),
+# category -> subfolder name inside the session's rag directory
+CATEGORY_DIRS = {
+    "movies": "movies",
+    "games": "gaming",
+    "writers": "stories",
 }
 
 # Category-specific query templates (Step 2: no more category-blind queries)
@@ -70,7 +72,15 @@ def _fetch_text(url, timeout=8):
         return f"[fetch error: {e}]"
 
 
-def search_and_save(name, subdir, category):
+def _first_line(filepath):
+    try:
+        with open(filepath, encoding="utf-8") as f:
+            return f.readline().strip()[:120]
+    except OSError:
+        return ""
+
+
+def search_and_save(name, subdir, category, sid=None):
     os.makedirs(subdir, exist_ok=True)
     base = _safe_filename(name)
     queries = [q.format(name=name) for q in CATEGORY_QUERIES.get(category, CATEGORY_QUERIES["movies"])]
@@ -88,7 +98,7 @@ def search_and_save(name, subdir, category):
                 if results:
                     break
             except Exception as e:
-                print(f"[FETCHER] attempt {attempt+1}/3 failed: {e}")
+                slog(sid, f"[FETCHER] attempt {attempt+1}/3 failed: {e}")
                 time.sleep(2)
         else:
             continue
@@ -106,11 +116,11 @@ def search_and_save(name, subdir, category):
             filepath = os.path.join(subdir, filename)
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(f"Title: {r.get('title', '')}\nURL: {url}\nQuery: {query}\n\n{content}")
-            print(f"[FETCHER] Saved: {filepath} ({len(content)} bytes)")
+            slog(sid, f"[FETCHER] Saved: {filepath} ({len(content)} B) — first line: {_first_line(filepath)}")
             fetched += 1
 
     if fetched == 0:
-        print(f"[FETCHER] No results for '{name}'")
+        slog(sid, f"[FETCHER] No results for '{name}'")
 
 
 def _extract_names(profile):
@@ -156,21 +166,7 @@ def _extract_names(profile):
     return names
 
 
-def _clear_subdirs():
-    for subdir in SUBDIRS.values():
-        for f in glob.glob(os.path.join(subdir, "*.txt")):
-            try:
-                os.remove(f)
-            except OSError:
-                pass
-    try:
-        os.remove(PATTERNS_FILE)
-        print("[FETCHER] Removed stale patterns file")
-    except OSError:
-        pass
-
-
-def fetch_from_profile(profile, status_setter=None, done_event=None):
+def fetch_from_profile(profile, session_dir=None, status_setter=None, done_event=None, sid=None):
     all_names = _extract_names(profile)
 
     if not all_names:
@@ -186,14 +182,17 @@ def fetch_from_profile(profile, status_setter=None, done_event=None):
         status_setter(f"[SEARCH] Looking up: {', '.join(labels)}")
 
     def _run():
-        _clear_subdirs()
+        # Fresh per-session storage: wipe the session's own folder (if it
+        # somehow exists) so we never mix with previous runs of this user.
+        if session_dir:
+            shutil.rmtree(session_dir, ignore_errors=True)
         for i, (name, category) in enumerate(all_names):
             if i > 0:
                 time.sleep(3)
-            subdir = SUBDIRS.get(category, RAG_DIR)
+            subdir = os.path.join(session_dir, CATEGORY_DIRS[category]) if session_dir else RAG_DIR
             if status_setter:
                 status_setter(f"[SEARCH] Fetching {name} ({i+1}/{total})...")
-            search_and_save(name, subdir, category)
+            search_and_save(name, subdir, category, sid=sid)
         if status_setter:
             status_setter(f"[DONE] RAG content saved to rag/ folders.")
         if done_event:
