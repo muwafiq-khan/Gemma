@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import threading
 from google import genai
 
@@ -770,6 +771,10 @@ def build_app():
 
 
 if __name__ == "__main__":
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     app = build_app()
 
     print(f"[+] Using {MODEL} with Google AI API")

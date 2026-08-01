@@ -1,5 +1,13 @@
 # Track Log
 
+## 2026-08-01 — FIXED: prints invisible on Render (stdout buffering)
+
+**What happened:** User got no `[SID]`/`[FETCH STATUS]` logs in Render Logs after the logging feature deploy — only tracebacks. Websearch confirmed the known Render/Python issue: stdout is block-buffered (8KB) when piped (non-TTY); stderr is unbuffered, which is why only tracebacks appeared. Locally it "worked" because the terminal is a TTY (line-buffered). Local proof: piped print arrived after 4.2s (process exit) — with `line_buffering=True` it arrives in ~60ms.
+
+**Result:** FIXED — `app.py` `__main__` adds `sys.stdout.reconfigure(line_buffering=True)` (try/except-wrapped). Pushed with commit. User additionally asked to add `PYTHONUNBUFFERED=1` in Render dashboard env vars for process-wide coverage.
+
+**Files:** app.py (`import sys` + reconfigure in `__main__`), track/fixes.md (entry)
+
 ## 2026-08-01 — Edit: new session start wipes old session files instantly
 
 **What happened:** User's rule simplified to "whenever a new session starts, old files get wiped out" (replaces waiting for the 1h sweeper grace).

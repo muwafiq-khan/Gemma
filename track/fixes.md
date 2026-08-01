@@ -4,6 +4,14 @@ Records of fixes applied, what broke, and how it was resolved.
 
 ---
 
+## 2026-08-01 — Prints invisible on Render (stdout block-buffering, not a code bug)
+
+**File:** `app.py` (`__main__`, +`import sys`)
+**What broke:** `[SID=...]`, `[INTERVIEW]`, `[FETCH STATUS]`, `[FETCHER]` prints never showed in Render Logs (only tracebacks did). Root cause (websearch-verified, Render-specific articles + SO): Python block-buffers stdout (8KB) when it's a pipe/non-TTY — which is what Render's log collector is. stderr is unbuffered, so error tracebacks always appeared — the classic "works locally (TTY=line-buffered), vanishes in container" trap. Proven locally: a print through a pipe arrived 4.2s later (process end) vs 61ms after the fix.
+**Fix:** `sys.stdout.reconfigure(line_buffering=True)` at startup (wrapped in try/except). Every print flushes per line — local AND Render. **Also recommended (dashboard-side, user action):** add env var `PYTHONUNBUFFERED=1` on Render for process-wide coverage.
+
+---
+
 ## 2026-08-01 — Bug B (UnboundLocalError 'prompt') regressed on Render — fix committed + pushed
 
 **File:** `app.py` (gen_scene), pushed to origin/main
