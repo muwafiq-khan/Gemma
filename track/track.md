@@ -1,5 +1,45 @@
 # Track Log
 
+## 2026-08-01 — Bug B regressed on Render → committed + pushed all pending fixes
+
+**What happened:** User hit `UnboundLocalError: 'prompt'` at app.py:583 on Render right after scene 1 + first choice click. NOT a new bug — Bug B's fix lived only in the local working tree (bug_report.md even warned "commit + push still pending"). Render deploys from GitHub; last commit `8e7fec6` still had `call_gemma(prompt)` OUTSIDE the `if reply is None:` block (verified via `git show HEAD:app.py` lines 557-583). Also investigated user's earlier "crash at story generation" report — that TypeError is Bug C (parse_json returns int for bare-number messages; can only fire from the interview Send button; logged as UNDER OBSERVATION per user).
+
+**Result:** Bug report updated (Bug B → REGRESSED ON RENDER + common-pattern finding; Bug C → UNDER OBSERVATION with full analysis). Committed + pushed `app.py`, `utils.py`, track files → Render auto-redeploys. Next: user re-tests choice click + scene 2+ on Render, then verify pregen logs.
+
+**Files:** track/bug_report.md (Bug B regression note, Bug C entry), track/fixes.md (2 entries), app.py + utils.py (committed + pushed)
+
+## 2026-08-01 — FIXED: raw JSON shown in some scenes (Gemma's missing-colon quirk)
+
+**What happened:** User saw raw JSON as scene text in some scenes. User's log captured 3 `parse_json FAILED` dumps — all with the SAME defect on choice b: `"text "\"value\""` (key with trailing space, colon dropped, stray backslash) instead of `"text": "value"`. Complete JSON otherwise (NOT truncation — my earlier hypothesis was wrong). parse failure → fallback (`sd = {"prose": reply}`) → raw JSON displayed + story_context polluted. Also unified with the earlier "Learn button missing" report (fallback scene has challenge=None). Similar incidents existed: July 30 truncation bug (fix: token bump, fixes.md:65) and pregen empty-cache bug (fixes.md:73) — same fragile point (parse fail → raw display), different causes.
+
+**Result:** FIXED. (1) `utils.py` `_repair_json()` wired into `parse_json`: token + optional ws + optional stray `\` + quote (impossible in valid JSON) → insert colon, drop stray backslash; second pass normalizes trailing-space keys. First attempt false-matched `": "` in valid JSON → fixed by excluding colons from token content (`[^"\\:]`). (2) pregen cache guard: only cache parseable replies (also kills latent API-error-string caching). (3) story_context guard: no JSON-shaped text appended. Verified with the exact 3 failing replies from the log — all parse (prose/choices/challenges intact); regression checks pass; py_compile + import OK.
+
+**Files:** utils.py (`_repair_json`), app.py (pregen guard, story_context guard), AGENTS.md (huha command added), track/bug_report.md (BUG A → Worked: YES), track/fixes.md
+
+## 2026-08-01 — FIXED: local URL shows 0.0.0.0 (Render bind leak into local runs)
+
+**What happened:** User reported that after the Render deploy commit (`8137fd4`), `python app.py` prints `http://0.0.0.0:7860` and nothing loads at that address (app still reachable at old 127.0.0.1). Root cause: the deploy commit made `server_name="0.0.0.0"` unconditional. `0.0.0.0` is a bind-all placeholder, not a navigable address — browsers refuse it (Chrome/Edge block it), so the printed URL was never clickable, while 127.0.0.1 still worked because a 0.0.0.0 bind serves all local interfaces. Server was never down — purely a display regression.
+
+**Result:** FIXED — `server_name="0.0.0.0" if on_render else "127.0.0.1"` (`app.py:760`). Locally the terminal prints `http://127.0.0.1:7860` again (verified with unbuffered launch: "Running on local URL: http://127.0.0.1:7860"); Render path verified with `RENDER=1` — binds `('0.0.0.0', 7860)` exactly as before (error shown in test was only a port-in-use conflict from the previous test instance). py_compile passes.
+
+**Files:** app.py (760), track/track.md (this entry)
+
+## 2026-08-01 — FIXED: UnboundLocalError 'prompt' at scene ~6 (pregen cache hit race)
+
+**What happened:** User hit `cannot access local variable 'prompt' where it is not associated with a value` around scene 6. Root cause found in `gen_scene`: `prompt` is assigned only inside `if reply is None:` (the cache-MISS branch), but `reply = call_gemma(prompt, ...)` sat OUTSIDE that block (`app.py:583`). When the background pregen thread finished in time, `_check_pregen` returned the cached scene → `prompt` never assigned → UnboundLocalError, caught by the outer except and shown in the UI. Bug introduced in Step 4 commit `1f1d9d4` (scene_prompt reformat when adding pattern_learnings_json dedented the call line out of the block — verified against `1f1d9d4^` where it was correctly inside).
+
+**Result:** FIXED — moved the call back inside the block (cache hit → use cached reply, no API call) + added `else: print(f"[PREGEN] scene {idx} cache hit")` for future diagnosis. py_compile passes; traced both paths (hit/miss); all 4 `call_gemma(prompt)` sites verified assigned-before-use. Why scene 6: timing — earlier scenes clicked before pregen finished (miss), scene 6 was the first cache hit.
+
+**Files:** app.py (583-585), track/bug_report.md (#13), track/track.md (this entry)
+
+## 2026-07-31 — README rewrite + push
+
+**What happened:** Studied the full codebase (app.py, prompts.py, state.py, utils.py, rag/ fetcher+analyzer, BUILD_SPEC, AGENTS.md, track logs) and rewrote README.md — now covers what the project is, the full user flow (landing → interview → skeleton → play → challenge → teaching → ending), a behind-the-scenes pipeline diagram (async fetch → pattern analysis → skeleton → pregen scene loop), and a key design decisions table (beats-not-branches, no-retry darker turns, DSA-as-gameplay, RAG personalization, static-vs-derived state).
+
+**Result:** README rewritten (115 insertions, 11 deletions), committed `8e7fec6`, pushed to origin/main (`931a8ab..8e7fec6`). Working tree clean after push.
+
+**Files:** README.md (rewrite), track/track.md (this entry)
+
 ## 2026-07-31 — Deployment: Render free tier (HF Spaces blocked)
 
 **What happened:** Attempted HF Spaces deployment — BLOCKED: `402 Payment Required` — Gradio/Docker Spaces on free cpu-basic now require PRO subscription (credit card), violating the no-card constraint. Researched alternatives (websearch, 2026 sources): Render free tier confirmed — no credit card (GitHub signup), 750 hrs/month (enough for 24/7), 512MB RAM, env vars free, git-push deploy, sleeps after 15 min idle (~30-60s cold start). User approved the pivot (HF → Render). Code change: `app.py` launch now reads `PORT` env + binds `0.0.0.0`, `debug=not on_render` (avoids reloader subprocess on Render). Pushed (`8137fd4`).

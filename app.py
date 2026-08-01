@@ -197,7 +197,7 @@ def _pregen_next(s, next_idx):
                 pattern_learnings_json=json.dumps(snap.get("rag_patterns", [])),
             )
             reply = call_gemma(prompt, max_tokens=4096)
-            if reply:
+            if reply and parse_json(reply):
                 _store_pregen(key, next_idx, reply)
         except Exception:
             pass
@@ -579,8 +579,10 @@ def build_app():
                         story_context=ctx,
                         upcoming_scenes_summary=json.dumps(upcoming),
                         pattern_learnings_json=json.dumps(s.get("rag_patterns", [])),
-                    )
-                    reply = call_gemma(prompt, max_tokens=4096)
+                        )
+                        reply = call_gemma(prompt, max_tokens=4096)
+                    else:
+                        print(f"[PREGEN] scene {idx} cache hit (background thread)")
 
                     if not reply:
                         reply = f"[Empty response from API. Using fallback scene.]"
@@ -599,7 +601,8 @@ def build_app():
                     ctx = s.get("story_context", "")
                     if len(ctx) > 1000:
                         ctx = "..." + ctx[-1000:]
-                    s["story_context"] = (ctx + "\n\n---\n\n" + p).strip()
+                    if p and not p.lstrip().startswith("{"):
+                        s["story_context"] = (ctx + "\n\n---\n\n" + p).strip()
 
                     choices = sd.get("choices", [{"id": "a", "text": "Continue", "type": "narrative"}])
                     header = f"### Scene {idx + 1} of {total}  |  {info.get('beat', '').replace('_', ' ').title()}"
@@ -755,7 +758,7 @@ if __name__ == "__main__":
     on_render = bool(os.environ.get("RENDER"))
     port = int(os.environ.get("PORT", "7860"))
     app.launch(
-        server_name="0.0.0.0",
+        server_name="0.0.0.0" if on_render else "127.0.0.1",
         server_port=port,
         debug=not on_render,
         share=False,

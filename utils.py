@@ -2,6 +2,16 @@ import json
 import re
 
 
+def _repair_json(text):
+    """Repair Gemma 4's known JSON quirk: a choice key is sometimes emitted as
+    `"text "<value>` — key with a trailing space, the colon dropped, and a
+    stray backslash before the value. Two quoted strings sitting next to each
+    other are impossible in valid JSON, so every match here is unambiguous."""
+    text = re.sub(r'("(?:\\.|[^"\\:])*")(\s*)\\?(?=")', r"\1:\2", text)
+    text = re.sub(r'"([^"\\]+?)\s+"(?=:)', r'"\1"', text)
+    return text
+
+
 def parse_json(text):
     if text is None:
         return None
@@ -9,6 +19,7 @@ def parse_json(text):
     m = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if m:
         text = m.group(1).strip()
+    text = _repair_json(text)
     text = re.sub(r",\s*}", "}", text)
     text = re.sub(r",\s*\]", "]", text)
     for attempt in [json.loads, lambda t: json.JSONDecoder().raw_decode(t)[0]]:

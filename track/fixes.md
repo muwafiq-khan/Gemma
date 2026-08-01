@@ -4,6 +4,32 @@ Records of fixes applied, what broke, and how it was resolved.
 
 ---
 
+## 2026-08-01 — Bug B (UnboundLocalError 'prompt') regressed on Render — fix committed + pushed
+
+**File:** `app.py` (gen_scene), pushed to origin/main
+**What broke:** After scene 1, clicking any choice crashed on Render with `UnboundLocalError: cannot access local variable 'prompt'` at `app.py:583`. NOT a code regression — the fix (call moved inside `if reply is None:` block) existed only in the local working tree, never committed. Render auto-deploys from GitHub and was running stale commit `8e7fec6` (verified via `git show HEAD:app.py`: line 583 outside the block). Cache HIT (pregen finished while reading scene 1) → `prompt` never assigned → crash.
+**Fix:** Committed + pushed `app.py` + `utils.py` (Bug A `_repair_json`, Bug B prompt fix, pregen guard, story_context guard, server_name local/render split) → Render redeploys. **Lesson: commit + push immediately after every fix, then verify on Render — "works locally" is meaningless until pushed.**
+
+---
+
+## 2026-08-01 — Bug C (TypeError int parse) — UNDER OBSERVATION, no fix yet
+
+**File:** `utils.py` (`parse_json`), `app.py:360-361`
+**What broke:** `parse_json` uses `json.loads` directly — a bare-number chat message (`"5"`, `"10"`, `"3.5"`, `"true"`) parses to int/float/bool, then `any(k in dumped ...)` in `chat_fn` crashes with `TypeError: argument of type 'int' is not iterable`. Reproduced locally. Same latent risk at app.py:392-394, :447, :590.
+**Status:** User decided to log as UNDER OBSERVATION (not reproducible in normal play). Proposed fix when approved: `parse_json` returns only dict/list results; `isinstance(dumped, dict)` guard in `chat_fn`.
+
+---
+
+## 2026-08-01 — Gemma emits malformed JSON (`"text "<value>` — missing colon), raw JSON shown in scenes
+
+**File:** `utils.py` (`_repair_json` in `parse_json`), `app.py` (pregen guard + story_context guard)
+**What broke:** Gemma 4 (temp 0.8) occasionally emits a choice as `"text "\"value\""` — key with trailing space, colon dropped, stray backslash. `parse_json` returned None → `gen_scene` fallback displayed the raw reply as scene text + polluted `story_context`. Captured 3 instances in user's log, all on choice b.
+**Fix:** `_repair_json` — regex finds a colon-free string token + optional ws + optional `\` + quote (impossible in valid JSON) and inserts the colon, dropping the backslash; second regex normalizes keys with trailing spaces. Wired into `parse_json` before all parse attempts. Pregen thread now only caches replies that parse (also stops non-empty API-error strings from being cached). JSON-shaped text never appended to `story_context`.
+**Dev note:** first regex version false-matched `": "` inside valid `"text": "..."` — fixed by excluding `:` from token content (`[^"\\:]`), since scene keys never contain colons.
+**Verified:** all 3 exact failing replies from the log parse correctly; regression checks pass; py_compile + app import OK.
+
+---
+
 ## 2026-07-31 — Design fix: rag_patterns wrongly nested inside user_profile
 
 **File:** `state.py`, `rag/analyzer.py`, `app.py`, `BUILD_SPEC.md`, `AGENTS.md`
